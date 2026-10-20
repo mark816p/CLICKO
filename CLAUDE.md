@@ -70,7 +70,14 @@ CLICKO/
 2. **Memory Alignment on x64**:
    - `RAWMOUSE` requires `[StructLayout(LayoutKind.Explicit)]` because `union { ULONG ulButtons; struct { USHORT usButtonFlags; ... } }` is 4-byte aligned in Win32 C SDK. `usButtonFlags` is at `[FieldOffset(4)]` (offset 4, not 2).
 
-3. **Persistence & Thread Safety**:
+3. **Persistence, Shutdown Safety & Multi-Tier Recovery**:
    - Counters use 64-bit `Interlocked.Increment` / `Interlocked.Read`.
-   - Auto-saves to `%APPDATA%\CLICKO\stats.json` every 5 seconds if dirty, and flushes on exit or system shutdown (`SessionEnding`).
-   - Writes to `stats.json.tmp` and replaces atomically to prevent file corruption on unexpected power loss.
+   - **Fast Debounce**: Auto-saves 1000ms after the last click, or at least every 2500ms of continuous clicking.
+   - **Atomic Disk Flushing**: Writes to `stats.json.tmp` with physical `fs.Flush(true)`, then atomically replaces `stats.json` and updates `stats.json.bak` via Win32 `ReplaceFile` / `File.Replace`.
+   - **OS Shutdown Handling**:
+     - `SetProcessShutdownParameters(0x3FF, 0)` gives CLICKO first-priority notification before other apps close.
+     - `WM_QUERYENDSESSION` and `WM_ENDSESSION` are intercepted by the native message sink and dashboard form to synchronously flush stats to disk.
+     - Calls `ShutdownBlockReasonCreate` during write to prevent the OS from terminating the process mid-save.
+     - Fallback hooks on `SessionEnding`, `SessionEnded`, `ProcessExit`, and `ApplicationExit`.
+   - **Self-Healing Multi-Tier Load**: If `stats.json` is ever missing, 0 bytes, or corrupted (e.g. hard power cut), CLICKO automatically recovers from `stats.json.bak` or `stats.json.tmp`.
+   - **Single-Instance Wakeup**: Running a second instance broadcasts `CLICKO_SHOW_DASHBOARD_MSG` to wake the tray instance and open its dashboard.

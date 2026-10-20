@@ -52,9 +52,11 @@ While standard click counters rely on high-level hooks that cannot identify the 
 - **⚡ Ultra-Lightweight & Battery-Friendly**:
   - Event-driven using native Win32 `WM_INPUT`.
   - Zero polling loops, 0% CPU consumption when idle, and <15 MB RAM.
-- **💾 Safe, Persistent Local Storage**:
-  - Keeps counts intact across computer reboots, logoffs, and app restarts.
-  - Saves to `%APPDATA%\CLICKO\stats.json` with atomic temporary file swapping to prevent data corruption during power loss.
+- **💾 Indestructible Shutdown-Safe Storage & Self-Healing**:
+  - Counts stay intact across computer reboots, unexpected shutdowns, logoffs, and app restarts.
+  - **Shutdown-Aware**: Listens to Win32 `WM_QUERYENDSESSION` / `WM_ENDSESSION` and acquires OS shutdown priority (`SetProcessShutdownParameters`) to flush data before Windows kills background processes.
+  - **Atomic File Swapping**: Uses Win32 `ReplaceFile` to replace `%APPDATA%\CLICKO\stats.json` and maintain an automatic `stats.json.bak` backup.
+  - **Self-Healing Multi-Tier Load**: If a hard power loss ever corrupts `stats.json`, CLICKO automatically restores from `stats.json.bak` or `stats.json.tmp`.
 - **🚀 Windows Startup Support**:
   - Optional toggle to launch automatically with Windows (via `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`).
   - Starts silently in the background tray without stealing window focus.

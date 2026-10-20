@@ -23,8 +23,8 @@ namespace CLICKO {
             _stats = ClickStats.Instance;
             _dashboardForm = new DashboardForm();
 
-            // Set up Raw Input Message Sink
-            _rawInputWindow = new RawInputWindow();
+            // Set up Raw Input Message Sink with dashboard summon delegate
+            _rawInputWindow = new RawInputWindow(() => ShowDashboard());
 
             // Load or generate Icon
             Icon appIcon = null;
@@ -199,9 +199,17 @@ namespace CLICKO {
         }
     }
 
-    // Hidden Native Window for Raw Input message sink
+    // Hidden Native Window for Raw Input message sink and OS Shutdown listener
     public class RawInputWindow : NativeWindow, IDisposable {
-        public RawInputWindow() {
+        private readonly Action _onShowDashboard;
+        private readonly uint _wmShowDashboard;
+
+        public RawInputWindow(Action onShowDashboard) {
+            _onShowDashboard = onShowDashboard;
+            try {
+                _wmShowDashboard = Win32.RegisterWindowMessage("CLICKO_SHOW_DASHBOARD_MSG");
+            } catch { }
+
             CreateParams cp = new CreateParams {
                 Caption = "CLICKO_RawInputSink",
                 Parent = IntPtr.Zero
@@ -221,6 +229,30 @@ namespace CLICKO {
         protected override void WndProc(ref Message m) {
             if (m.Msg == Win32.WM_INPUT) {
                 ProcessRawInput(m.LParam);
+            } else if (m.Msg == Win32.WM_QUERYENDSESSION) {
+                // Windows is querying whether shutdown can proceed. Save immediately!
+                try {
+                    Win32.ShutdownBlockReasonCreate(this.Handle, "CLICKO is saving click stats...");
+                    ClickStats.Instance.Save();
+                } catch { }
+                finally {
+                    try { Win32.ShutdownBlockReasonDestroy(this.Handle); } catch { }
+                }
+                m.Result = (IntPtr)1; // Approve shutdown
+                return;
+            } else if (m.Msg == Win32.WM_ENDSESSION) {
+                // Session is ending (logoff or shutdown confirmed). Flush to disk.
+                if (m.WParam != IntPtr.Zero) {
+                    ClickStats.Instance.Save();
+                }
+                m.Result = IntPtr.Zero;
+                return;
+            } else if (_wmShowDashboard != 0 && m.Msg == _wmShowDashboard) {
+                // Second instance requested to show the dashboard
+                if (_onShowDashboard != null) {
+                    _onShowDashboard();
+                }
+                return;
             }
             base.WndProc(ref m);
         }

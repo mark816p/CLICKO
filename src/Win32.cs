@@ -5,6 +5,9 @@ using System.Text;
 namespace CLICKO {
     public static class Win32 {
         public const int WM_INPUT = 0x00FF;
+        public const int WM_QUERYENDSESSION = 0x0011;
+        public const int WM_ENDSESSION = 0x0016;
+        public static readonly IntPtr HWND_BROADCAST = (IntPtr)0xffff;
 
         public const ushort USAGE_PAGE_GENERIC = 0x0001;
         public const ushort USAGE_MOUSE = 0x0002;
@@ -89,6 +92,21 @@ namespace CLICKO {
 
         [DllImport("user32.dll")]
         public static extern bool SetProcessDPIAware();
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool SetProcessShutdownParameters(uint dwLevel, uint dwFlags);
+
+        [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        public static extern bool ShutdownBlockReasonCreate(IntPtr hWnd, string pwszReason);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool ShutdownBlockReasonDestroy(IntPtr hWnd);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        public static extern uint RegisterWindowMessage(string lpString);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 
         // cfgmgr32.dll PnP device tree navigation
         [DllImport("cfgmgr32.dll", SetLastError = true, CharSet = CharSet.Auto)]

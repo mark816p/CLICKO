@@ -536,6 +536,22 @@ namespace CLICKO {
             return btn;
         }
 
+        protected override void WndProc(ref Message m) {
+            if (m.Msg == Win32.WM_QUERYENDSESSION) {
+                _stats.Save();
+                m.Result = (IntPtr)1;
+                return;
+            }
+            if (m.Msg == Win32.WM_ENDSESSION) {
+                if (m.WParam != IntPtr.Zero) {
+                    _stats.Save();
+                }
+                m.Result = IntPtr.Zero;
+                return;
+            }
+            base.WndProc(ref m);
+        }
+
         protected override void OnFormClosing(FormClosingEventArgs e) {
             // When user clicks 'X', minimize to tray instead of quitting
             if (e.CloseReason == CloseReason.UserClosing) {

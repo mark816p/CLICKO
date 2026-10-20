@@ -14,15 +14,23 @@ namespace CLICKO {
             _mutex = new Mutex(true, MUTEX_NAME, out createdNew);
 
             if (!createdNew) {
-                MessageBox.Show(
-                    "CLICKO is already running in your system tray.\nLook for the CLICKO icon near your Windows taskbar clock.",
-                    "CLICKO Already Running",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information);
+                // Another instance is already running (e.g. from Windows Startup).
+                // Wake up the running instance to open the dashboard smoothly.
+                try {
+                    uint wmShow = Win32.RegisterWindowMessage("CLICKO_SHOW_DASHBOARD_MSG");
+                    if (wmShow != 0) {
+                        Win32.PostMessage(Win32.HWND_BROADCAST, wmShow, IntPtr.Zero, IntPtr.Zero);
+                    }
+                } catch { }
                 return;
             }
 
             try {
+                // Inform Windows OS to notify CLICKO of system shutdown first
+                try {
+                    Win32.SetProcessShutdownParameters(0x3FF, 0);
+                } catch { }
+
                 // Ensure High-DPI crisp fonts on Windows 10/11
                 try {
                     Win32.SetProcessDPIAware();
@@ -41,9 +49,13 @@ namespace CLICKO {
                     }
                 }
 
-                // Register session ending / app exit hooks for guaranteed persistence
-                AppDomain.CurrentDomain.ProcessExit += (s, e) => ClickStats.Instance.SaveIfDirty();
-                Microsoft.Win32.SystemEvents.SessionEnding += (s, e) => ClickStats.Instance.SaveIfDirty();
+                // Register all system shutdown and process exit hooks for guaranteed persistence
+                AppDomain.CurrentDomain.ProcessExit += (s, e) => ClickStats.Instance.Save();
+                Application.ApplicationExit += (s, e) => ClickStats.Instance.Save();
+                try {
+                    Microsoft.Win32.SystemEvents.SessionEnding += (s, e) => ClickStats.Instance.Save();
+                    Microsoft.Win32.SystemEvents.SessionEnded += (s, e) => ClickStats.Instance.Save();
+                } catch { }
 
                 Application.Run(new TrayContext(startMinimized));
             } finally {
