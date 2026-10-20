@@ -1,0 +1,18 @@
+# Binaries and temporary build files
+*.obj
+*.pdb
+*.tmp
+*.log
+Test*.cs
+Test*.exe
+click_log.txt
+icon_gen.exe
+
+# User data
+stats.json
+stats.json.tmp
+bin/
+obj/
+.vs/
+.vscode/
+.idea/
