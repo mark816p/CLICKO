@@ -64,7 +64,8 @@ CLICKO/
    - `cfgmgr32.dll` (`CM_Locate_DevNode`, `CM_Get_Parent`, `CM_Get_Device_ID`) traverses to the device's PnP parent node:
      - Parent starts with `USB\` or contains `\USB\` -> `DeviceType.UsbMouse`
      - Parent starts with `ACPI\`, `I2C\`, or contains `PNP0F`/`ELAN`/`SYN`/`ALPS` -> `DeviceType.Touchpad`
-     - Synthetic / `IntPtr.Zero` / touch injection signature `(extra & 0xFFFFFF00) == 0xFF515700` -> `DeviceType.Touchpad`
+     - Synthetic / `IntPtr.Zero`: In Windows Raw Input, `hDevice == IntPtr.Zero` indicates software injection (`SendInput`, `mouse_event`, autoclickers, macros). These are classified as `DeviceType.AutoClicker` and filtered out so they never pollute physical mouse or touchpad statistics (filtered counts are tracked separately in `AutoClicksFiltered`).
+     - Touchscreen / Pen: Identified via `MI_WP_SIGNATURE` (`(extra & 0xFFFFFF00) == 0xFF515700`) and mapped to `DeviceType.Other`.
    - Classifications are cached by `IntPtr hDevice` in a thread-safe dictionary for O(1) performance on every click.
 
 2. **Memory Alignment on x64**:

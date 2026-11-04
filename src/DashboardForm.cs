@@ -31,6 +31,7 @@ namespace CLICKO {
 
         private Label lblTodayNumber;
         private Label lblStoragePath;
+        private Label lblAutoClicks;
 
         private Panel pnlLeftCard;
         private Panel pnlRightCard;
@@ -340,8 +341,18 @@ namespace CLICKO {
                 TextAlign = ContentAlignment.MiddleRight
             };
 
+            lblAutoClicks = new Label {
+                Text = "🛡️ Auto-Clicker Filter: Active",
+                Font = new Font("Segoe UI", 7.5f, FontStyle.Regular),
+                ForeColor = Color.FromArgb(148, 163, 184),
+                Location = new Point(170, 14),
+                Size = new Size(370, 20),
+                TextAlign = ContentAlignment.MiddleRight
+            };
+
             pnlToday.Controls.Add(lblTodayLabel);
             pnlToday.Controls.Add(lblTodayNumber);
+            pnlToday.Controls.Add(lblAutoClicks);
             pnlToday.Controls.Add(lblStoragePath);
             root.Controls.Add(pnlToday);
             y += 80;
@@ -443,6 +454,16 @@ namespace CLICKO {
 
             // Today
             lblTodayNumber.Text = string.Format("{0:N0}", _stats.TodayTotal);
+
+            // Auto-clicker filter status
+            long blocked = _stats.AutoClicksFiltered;
+            if (blocked > 0) {
+                lblAutoClicks.Text = string.Format("🛡️ Auto-Clicker: Active ({0:N0} filtered)", blocked);
+                lblAutoClicks.ForeColor = Color.FromArgb(52, 211, 153);
+            } else {
+                lblAutoClicks.Text = "🛡️ Auto-Clicker Filter: Active (0 filtered)";
+                lblAutoClicks.ForeColor = Color.FromArgb(148, 163, 184);
+            }
 
             // Redraw split bar and flash cards
             pnlSplitBar.Invalidate();

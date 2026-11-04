@@ -40,6 +40,8 @@ namespace CLICKO {
         public long OtherRight = 0;
         public long OtherMiddle = 0;
 
+        public long AutoClicksFiltered = 0;
+
         public string TodayDate = DateTime.Now.ToString("yyyy-MM-dd");
         public long TodayLeft = 0;
         public long TodayRight = 0;
@@ -150,6 +152,11 @@ namespace CLICKO {
             }
         }
 
+        public void RecordAutoClick(ClickButton button) {
+            Interlocked.Increment(ref _store.AutoClicksFiltered);
+            _isDirty = true;
+        }
+
         private void CheckAutoSave() {
             if (!_isDirty) return;
 
@@ -203,6 +210,9 @@ namespace CLICKO {
         public long OtherMiddle { get { return Interlocked.Read(ref _store.OtherMiddle); } }
         public long OtherTotal { get { return OtherLeft + OtherRight + OtherMiddle; } }
 
+        // Auto-clicks filtered
+        public long AutoClicksFiltered { get { return Interlocked.Read(ref _store.AutoClicksFiltered); } }
+
         // Today
         public long TodayLeft { get { return Interlocked.Read(ref _store.TodayLeft); } }
         public long TodayRight { get { return Interlocked.Read(ref _store.TodayRight); } }
@@ -226,6 +236,8 @@ namespace CLICKO {
                 _store.OtherLeft = 0;
                 _store.OtherRight = 0;
                 _store.OtherMiddle = 0;
+
+                _store.AutoClicksFiltered = 0;
 
                 _store.TodayLeft = 0;
                 _store.TodayRight = 0;
@@ -351,6 +363,8 @@ namespace CLICKO {
             _store.OtherLeft = loaded.OtherLeft;
             _store.OtherRight = loaded.OtherRight;
             _store.OtherMiddle = loaded.OtherMiddle;
+
+            _store.AutoClicksFiltered = loaded.AutoClicksFiltered;
 
             _store.TodayDate = loaded.TodayDate;
             _store.TodayLeft = loaded.TodayLeft;

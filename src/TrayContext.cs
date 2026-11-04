@@ -278,6 +278,13 @@ namespace CLICKO {
                         if (isLeft || isRight || isMiddle) {
                             DeviceClassification dev = DeviceDetector.Classify(raw.header.hDevice);
 
+                            // Detect autoclicker / software-injected clicks (SendInput / mouse_event)
+                            if (dev.Type == DeviceType.AutoClicker) {
+                                ClickButton btn = isLeft ? ClickButton.Left : (isRight ? ClickButton.Right : ClickButton.Middle);
+                                ClickStats.Instance.RecordAutoClick(btn);
+                                return; // Do NOT count as physical user mouse/touchpad clicks
+                            }
+
                             if (isLeft) ClickStats.Instance.RecordClick(ClickButton.Left, dev);
                             if (isRight) ClickStats.Instance.RecordClick(ClickButton.Right, dev);
                             if (isMiddle) ClickStats.Instance.RecordClick(ClickButton.Middle, dev);
