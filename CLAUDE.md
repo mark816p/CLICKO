@@ -49,24 +49,31 @@ CLICKO/
     ├── DeviceDetector.cs# Hardware classification engine (USB Mouse vs. Touchpad)
     ├── ClickStats.cs    # Atomic counters (Interlocked), auto-save timer, JSON persistence
     ├── StartupManager.cs# Windows registry run key manager (HKCU\Software\Microsoft\Windows\CurrentVersion\Run)
-    ├── DashboardForm.cs # Dark theme dashboard, live click flashes, device comparison split bar
-    ├── TrayContext.cs   # System tray icon, dynamic tooltip, context menu, raw input message pump
+    ├── DashboardForm.cs # Dark theme dashboard, live click flashes, device comparison split bar, activity heatmap & streaks
+    ├── TrayContext.cs   # System tray icon, dynamic tooltip, context menu, raw input message pump, injection hook
     └── IconGenerator.cs # Programmatic vector icon generator
 ```
 
 ### Critical Architecture Details
 
-1. **Hardware-Level Click Attribution (USB vs Touchpad)**:
-   - High-level mouse hooks (`WH_MOUSE_LL` in libraries like `pynput`) do not provide device handles.
-   - CLICKO registers a Win32 Raw Input sink (`RegisterRawInputDevices` with `RIDEV_INPUTSINK`, `usUsagePage = 1`, `usUsage = 2`) on an internal window handle.
-   - When `WM_INPUT` arrives, `RAWINPUTHEADER.hDevice` points to the physical input device.
-   - `DeviceDetector` inspects `GetRawInputDeviceInfo(hDevice, RIDI_DEVICENAME)`.
-   - `cfgmgr32.dll` (`CM_Locate_DevNode`, `CM_Get_Parent`, `CM_Get_Device_ID`) traverses to the device's PnP parent node:
-     - Parent starts with `USB\` or contains `\USB\` -> `DeviceType.UsbMouse`
-     - Parent starts with `ACPI\`, `I2C\`, or contains `PNP0F`/`ELAN`/`SYN`/`ALPS` -> `DeviceType.Touchpad`
-     - Synthetic / `IntPtr.Zero`: In Windows Raw Input, `hDevice == IntPtr.Zero` indicates software injection (`SendInput`, `mouse_event`, autoclickers, macros). These are classified as `DeviceType.AutoClicker` and filtered out so they never pollute physical mouse or touchpad statistics (filtered counts are tracked separately in `AutoClicksFiltered`).
-     - Touchscreen / Pen: Identified via `MI_WP_SIGNATURE` (`(extra & 0xFFFFFF00) == 0xFF515700`) and mapped to `DeviceType.Other`.
-   - Classifications are cached by `IntPtr hDevice` in a thread-safe dictionary for O(1) performance on every click.
+1. **Hardware-Level Click Attribution & Injection Discrimination (USB vs Touchpad vs AutoClicker)**:
+   - High-level mouse hooks alone do not provide device handles, while Raw Input alone delivers NULL device handles for both Precision Touchpad taps and software-injected clicks.
+   - CLICKO implements a coordinated dual-subsystem engine:
+     - Win32 Raw Input sink (`RegisterRawInputDevices` with `RIDEV_INPUTSINK`, `usUsagePage = 1`, `usUsage = 2`) on an internal window handle.
+     - Win32 Low-Level Mouse Hook (`WH_MOUSE_LL`) to capture kernel `LLMHF_INJECTED` and `LLMHF_LOWER_IL_INJECTED` flags on pointer messages.
+   - For non-zero `hDevice`:
+     - `cfgmgr32.dll` (`CM_Locate_DevNode`, `CM_Get_Parent`, `CM_Get_Device_ID`) traverses to the device's PnP parent node:
+       - Parent starts with `USB\` or contains `\USB\` -> `DeviceType.UsbMouse`
+       - Parent starts with `ACPI\`, `I2C\`, or contains `PNP0F`/`ELAN`/`SYN`/`ALPS` -> `DeviceType.Touchpad`
+   - For `hDevice == IntPtr.Zero`:
+     - If the low-level hook detected `LLMHF_INJECTED == 1` OR click interval indicates an inhuman burst (< 30ms / > 20 CPS) -> classified as `DeviceType.AutoClicker` and filtered into `AutoClicksFiltered`.
+     - If `LLMHF_INJECTED == 0` -> genuine human touch/tap from Windows Precision Touchpad -> classified as `DeviceType.Touchpad` and attributed to physical touchpad counters.
+   - Classifications for non-zero devices are cached in a thread-safe dictionary for O(1) microsecond lookup on every click.
+
+2. **Day-by-Day Activity Heatmap & Streak Tracker**:
+   - `ClickStats` maintains a date-keyed dictionary `DailyHistory` (`yyyy-MM-dd` -> `int`).
+   - `CurrentStreak` and `LongestStreak` calculate active clicking streaks.
+   - `DashboardForm` embeds a custom double-buffered `ActivityHeatmapPanel` rendering a GitHub/LeetCode-style 7-day grid across months with CLICKO's cyan/slate theme, hover tooltips, and month navigation.
 
 2. **Memory Alignment on x64**:
    - `RAWMOUSE` requires `[StructLayout(LayoutKind.Explicit)]` because `union { ULONG ulButtons; struct { USHORT usButtonFlags; ... } }` is 4-byte aligned in Win32 C SDK. `usButtonFlags` is at `[FieldOffset(4)]` (offset 4, not 2).

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -33,6 +34,8 @@ namespace CLICKO {
         private Label lblStoragePath;
         private Label lblAutoClicks;
 
+        private ActivityHeatmapPanel pnlHeatmap;
+
         private Panel pnlLeftCard;
         private Panel pnlRightCard;
         private Panel pnlMiddleCard;
@@ -56,7 +59,7 @@ namespace CLICKO {
 
         private void InitializeComponent() {
             this.Text = "CLICKO - Hardware-Aware Click Counter";
-            this.Size = new Size(620, 680);
+            this.Size = new Size(620, 820);
             this.MinimumSize = new Size(620, 680);
             this.StartPosition = FormStartPosition.CenterScreen;
             this.BackColor = Color.FromArgb(15, 17, 26);
@@ -314,6 +317,14 @@ namespace CLICKO {
             root.Controls.Add(pnlDevice);
             y += 192;
 
+            // ================= DAY-BY-DAY ACTIVITY HEATMAP & STREAK =================
+            pnlHeatmap = new ActivityHeatmapPanel(_stats) {
+                Location = new Point(20, y),
+                Size = new Size(560, 245)
+            };
+            root.Controls.Add(pnlHeatmap);
+            y += 255;
+
             // ================= TODAY / PERSISTENCE INFO =================
             Panel pnlToday = CreateCardPanel(20, y, 560, 68);
 
@@ -465,11 +476,12 @@ namespace CLICKO {
                 lblAutoClicks.ForeColor = Color.FromArgb(148, 163, 184);
             }
 
-            // Redraw split bar and flash cards
+            // Redraw split bar, flash cards and heatmap
             pnlSplitBar.Invalidate();
             pnlLeftCard.Invalidate();
             pnlRightCard.Invalidate();
             pnlMiddleCard.Invalidate();
+            if (pnlHeatmap != null) pnlHeatmap.Invalidate();
         }
 
         private void PaintSplitBar(object sender, PaintEventArgs e) {
@@ -581,6 +593,282 @@ namespace CLICKO {
             } else {
                 base.OnFormClosing(e);
             }
+        }
+    }
+
+    /// <summary>
+    /// Day-by-day click contribution heatmap and streak tracker.
+    /// Modeled with GitHub/LeetCode-style activity grid in CLICKO's cyan/slate theme.
+    /// </summary>
+    public class ActivityHeatmapPanel : Panel {
+        private readonly ClickStats _stats;
+        private int _weekOffset = 0; // 0 = current week on the far right
+        private Point? _hoveredCell = null; // (weekIndex, dayIndex)
+        private readonly ToolTip _toolTip;
+        private Rectangle _btnPrevRect;
+        private Rectangle _btnNextRect;
+
+        private const int GridX = 52;
+        private const int GridY = 74;
+        private const int CellSize = 14;
+        private const int CellGap = 4;
+        private const int NumWeeks = 23;
+
+        public ActivityHeatmapPanel(ClickStats stats) {
+            _stats = stats;
+            this.DoubleBuffered = true;
+            this.BackColor = Color.FromArgb(26, 29, 43);
+
+            _toolTip = new ToolTip {
+                InitialDelay = 50,
+                ReshowDelay = 50,
+                AutoPopDelay = 6000
+            };
+
+            this.MouseMove += OnMouseMove;
+            this.MouseLeave += OnMouseLeave;
+            this.MouseDown += OnMouseDown;
+        }
+
+        protected override void OnPaint(PaintEventArgs e) {
+            base.OnPaint(e);
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+
+            int w = this.Width;
+            int h = this.Height;
+
+            // 1. Card Border
+            using (Pen borderPen = new Pen(Color.FromArgb(42, 46, 68), 1f)) {
+                g.DrawRectangle(borderPen, 0, 0, w - 1, h - 1);
+            }
+
+            // 2. Header: Streak Counters
+            int currentStreak = _stats.CurrentStreak;
+            int longestStreak = _stats.LongestStreak;
+            string streakText = string.Format("{0} day streak", currentStreak);
+
+            using (Font streakFont = new Font("Segoe UI", 18f, FontStyle.Bold))
+            using (SolidBrush textBrush = new SolidBrush(Color.White)) {
+                g.DrawString(streakText, streakFont, textBrush, 18, 12);
+            }
+
+            string longestText = string.Format("LONGEST STREAK | {0} DAYS", longestStreak);
+            using (Font longestFont = new Font("Segoe UI", 8.5f, FontStyle.Bold))
+            using (SolidBrush cyanBrush = new SolidBrush(Color.FromArgb(34, 211, 238))) {
+                SizeF sz = g.MeasureString(longestText, longestFont);
+                g.DrawString(longestText, longestFont, cyanBrush, w - sz.Width - 20, 20);
+            }
+
+            // 3. Navigation Controls (< and >)
+            _btnPrevRect = new Rectangle(18, 48, 20, 18);
+            _btnNextRect = new Rectangle(w - 38, 48, 20, 18);
+
+            using (Font navFont = new Font("Segoe UI", 9.5f, FontStyle.Bold))
+            using (SolidBrush navBrush = new SolidBrush(Color.FromArgb(148, 163, 184)))
+            using (SolidBrush disabledBrush = new SolidBrush(Color.FromArgb(55, 65, 81))) {
+                g.DrawString("<", navFont, navBrush, _btnPrevRect.X + 4, _btnPrevRect.Y);
+                g.DrawString(">", navFont, _weekOffset > 0 ? navBrush : disabledBrush, _btnNextRect.X + 4, _btnNextRect.Y);
+            }
+
+            // Calculate Date Window
+            DateTime today = DateTime.Today;
+            DateTime endSaturday = today;
+            while (endSaturday.DayOfWeek != DayOfWeek.Saturday) {
+                endSaturday = endSaturday.AddDays(1);
+            }
+            endSaturday = endSaturday.AddDays(-_weekOffset * 7);
+            DateTime startDate = endSaturday.AddDays(-(NumWeeks * 7 - 1));
+
+            // Month Labels
+            using (Font monthFont = new Font("Segoe UI", 8f, FontStyle.Regular))
+            using (SolidBrush monthBrush = new SolidBrush(Color.FromArgb(148, 163, 184))) {
+                int lastMonth = -1;
+                for (int wi = 0; wi < NumWeeks; wi++) {
+                    DateTime weekStart = startDate.AddDays(wi * 7);
+                    if (weekStart.Month != lastMonth) {
+                        lastMonth = weekStart.Month;
+                        int x = GridX + wi * (CellSize + CellGap);
+                        g.DrawString(weekStart.ToString("MMM"), monthFont, monthBrush, x, 50);
+                    }
+                }
+            }
+
+            // Day-of-Week Labels on Left (Sun - Sat)
+            string[] dayNames = new string[] { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+            using (Font dayFont = new Font("Segoe UI", 7.5f, FontStyle.Regular))
+            using (SolidBrush dayBrush = new SolidBrush(Color.FromArgb(148, 163, 184))) {
+                for (int r = 0; r < 7; r++) {
+                    int y = GridY + r * (CellSize + CellGap);
+                    g.DrawString(dayNames[r], dayFont, dayBrush, 18, y);
+                }
+            }
+
+            // 4. Heatmap Cells
+            Dictionary<string, int> history = _stats.GetDailyHistoryCopy();
+
+            for (int wi = 0; wi < NumWeeks; wi++) {
+                for (int di = 0; di < 7; di++) {
+                    DateTime date = startDate.AddDays(wi * 7 + di);
+                    int x = GridX + wi * (CellSize + CellGap);
+                    int y = GridY + di * (CellSize + CellGap);
+
+                    int clicks = 0;
+                    string key = date.ToString("yyyy-MM-dd");
+                    history.TryGetValue(key, out clicks);
+
+                    Color cellColor;
+                    if (date > today) {
+                        cellColor = Color.FromArgb(20, 23, 34); // Future
+                    } else if (clicks == 0) {
+                        cellColor = Color.FromArgb(32, 38, 56); // 0 clicks
+                    } else if (clicks <= 250) {
+                        cellColor = Color.FromArgb(14, 116, 144); // Level 1 (Deep Ocean Cyan)
+                    } else if (clicks <= 1000) {
+                        cellColor = Color.FromArgb(6, 182, 212);  // Level 2 (Vivid Cyan)
+                    } else if (clicks <= 2500) {
+                        cellColor = Color.FromArgb(34, 211, 238); // Level 3 (Electric Cyan)
+                    } else {
+                        cellColor = Color.FromArgb(165, 243, 252);// Level 4 (Luminous Ice Cyan)
+                    }
+
+                    Rectangle cellRect = new Rectangle(x, y, CellSize, CellSize);
+                    DrawRoundedRect(g, cellRect, 3, cellColor);
+
+                    // Hover indicator
+                    if (_hoveredCell.HasValue && _hoveredCell.Value.X == wi && _hoveredCell.Value.Y == di) {
+                        using (Pen hoverPen = new Pen(Color.White, 1.5f)) {
+                            DrawRoundedRectOutline(g, cellRect, 3, hoverPen);
+                        }
+                    }
+                }
+            }
+
+            // 5. Bottom Legend: More [][][][] Less
+            int legY = 214;
+            int legX = 20;
+            using (Font legFont = new Font("Segoe UI", 8f, FontStyle.Regular))
+            using (SolidBrush legBrush = new SolidBrush(Color.FromArgb(148, 163, 184))) {
+                g.DrawString("More", legFont, legBrush, legX, legY);
+                legX += 36;
+
+                Color[] legendColors = new Color[] {
+                    Color.FromArgb(165, 243, 252),
+                    Color.FromArgb(34, 211, 238),
+                    Color.FromArgb(6, 182, 212),
+                    Color.FromArgb(14, 116, 144)
+                };
+
+                for (int i = 0; i < legendColors.Length; i++) {
+                    DrawRoundedRect(g, new Rectangle(legX, legY + 1, 12, 12), 2, legendColors[i]);
+                    legX += 16;
+                }
+
+                g.DrawString("Less", legFont, legBrush, legX + 2, legY);
+            }
+        }
+
+        private void OnMouseMove(object sender, MouseEventArgs e) {
+            if (_btnPrevRect.Contains(e.Location) || (_weekOffset > 0 && _btnNextRect.Contains(e.Location))) {
+                this.Cursor = Cursors.Hand;
+            } else {
+                this.Cursor = Cursors.Default;
+            }
+
+            int col = (e.X - GridX) / (CellSize + CellGap);
+            int row = (e.Y - GridY) / (CellSize + CellGap);
+
+            if (col >= 0 && col < NumWeeks && row >= 0 && row < 7) {
+                int cellX = GridX + col * (CellSize + CellGap);
+                int cellY = GridY + row * (CellSize + CellGap);
+                if (e.X >= cellX && e.X <= cellX + CellSize && e.Y >= cellY && e.Y <= cellY + CellSize) {
+                    Point current = new Point(col, row);
+                    if (!_hoveredCell.HasValue || _hoveredCell.Value != current) {
+                        _hoveredCell = current;
+                        this.Invalidate();
+
+                        DateTime endSaturday = DateTime.Today;
+                        while (endSaturday.DayOfWeek != DayOfWeek.Saturday) {
+                            endSaturday = endSaturday.AddDays(1);
+                        }
+                        endSaturday = endSaturday.AddDays(-_weekOffset * 7);
+                        DateTime startDate = endSaturday.AddDays(-(NumWeeks * 7 - 1));
+                        DateTime date = startDate.AddDays(col * 7 + row);
+
+                        string key = date.ToString("yyyy-MM-dd");
+                        int clicks = 0;
+                        _stats.GetDailyHistoryCopy().TryGetValue(key, out clicks);
+
+                        string dateLabel = date.ToString("dddd, MMM d, yyyy");
+                        if (date == DateTime.Today) dateLabel += " (Today)";
+
+                        string tip = (date > DateTime.Today)
+                            ? string.Format("{0}\nFuture date", dateLabel)
+                            : (clicks > 0
+                                ? string.Format("{0}\n{1:N0} clicks recorded", dateLabel, clicks)
+                                : string.Format("{0}\nNo clicks recorded", dateLabel));
+
+                        _toolTip.SetToolTip(this, tip);
+                    }
+                    return;
+                }
+            }
+
+            if (_hoveredCell.HasValue) {
+                _hoveredCell = null;
+                _toolTip.SetToolTip(this, null);
+                this.Invalidate();
+            }
+        }
+
+        private void OnMouseLeave(object sender, EventArgs e) {
+            if (_hoveredCell.HasValue) {
+                _hoveredCell = null;
+                _toolTip.SetToolTip(this, null);
+                this.Invalidate();
+            }
+        }
+
+        private void OnMouseDown(object sender, MouseEventArgs e) {
+            if (_btnPrevRect.Contains(e.Location)) {
+                _weekOffset += 4;
+                this.Invalidate();
+            } else if (_btnNextRect.Contains(e.Location) && _weekOffset > 0) {
+                _weekOffset = Math.Max(0, _weekOffset - 4);
+                this.Invalidate();
+            }
+        }
+
+        private void DrawRoundedRect(Graphics g, Rectangle rect, int radius, Color color) {
+            using (GraphicsPath path = GetRoundedPath(rect, radius))
+            using (SolidBrush b = new SolidBrush(color)) {
+                g.FillPath(b, path);
+            }
+        }
+
+        private void DrawRoundedRectOutline(Graphics g, Rectangle rect, int radius, Pen pen) {
+            using (GraphicsPath path = GetRoundedPath(rect, radius)) {
+                g.DrawPath(pen, path);
+            }
+        }
+
+        private GraphicsPath GetRoundedPath(Rectangle rect, int radius) {
+            GraphicsPath path = new GraphicsPath();
+            int d = radius * 2;
+            path.AddArc(rect.X, rect.Y, d, d, 180, 90);
+            path.AddArc(rect.Right - d, rect.Y, d, d, 270, 90);
+            path.AddArc(rect.Right - d, rect.Bottom - d, d, d, 0, 90);
+            path.AddArc(rect.X, rect.Bottom - d, d, d, 90, 90);
+            path.CloseFigure();
+            return path;
+        }
+
+        protected override void Dispose(bool disposing) {
+            if (disposing && _toolTip != null) {
+                _toolTip.Dispose();
+            }
+            base.Dispose(disposing);
         }
     }
 }

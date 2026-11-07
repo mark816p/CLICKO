@@ -204,6 +204,14 @@ namespace CLICKO {
         private readonly Action _onShowDashboard;
         private readonly uint _wmShowDashboard;
 
+        // Low-level mouse hook to accurately distinguish software autoclickers (SendInput/mouse_event)
+        // from physical Precision Touchpad taps/clicks
+        private static Win32.LowLevelMouseProc _mouseHookProc;
+        private static IntPtr _mouseHookHandle = IntPtr.Zero;
+        private static volatile uint _lastHookFlags = 0;
+        private static volatile int _lastHookTick = 0;
+        private static int _lastZeroClickTick = 0;
+
         public RawInputWindow(Action onShowDashboard) {
             _onShowDashboard = onShowDashboard;
             try {
@@ -224,6 +232,33 @@ namespace CLICKO {
             rid[0].hwndTarget = this.Handle;
 
             Win32.RegisterRawInputDevices(rid, 1, (uint)Marshal.SizeOf(typeof(Win32.RAWINPUTDEVICE)));
+
+            // Install low-level mouse hook for hardware injection detection
+            try {
+                _mouseHookProc = HookCallback;
+                using (Process curProcess = Process.GetCurrentProcess())
+                using (ProcessModule curModule = curProcess.MainModule) {
+                    _mouseHookHandle = Win32.SetWindowsHookEx(
+                        Win32.WH_MOUSE_LL,
+                        _mouseHookProc,
+                        Win32.GetModuleHandle(curModule.ModuleName),
+                        0);
+                }
+            } catch { }
+        }
+
+        private static IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam) {
+            if (nCode >= 0) {
+                int msg = wParam.ToInt32();
+                if (msg == Win32.WM_LBUTTONDOWN || msg == Win32.WM_RBUTTONDOWN || msg == Win32.WM_MBUTTONDOWN) {
+                    try {
+                        Win32.MSLLHOOKSTRUCT s = (Win32.MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(Win32.MSLLHOOKSTRUCT));
+                        _lastHookFlags = s.flags;
+                        _lastHookTick = Environment.TickCount;
+                    } catch { }
+                }
+            }
+            return Win32.CallNextHookEx(_mouseHookHandle, nCode, wParam, lParam);
         }
 
         protected override void WndProc(ref Message m) {
@@ -276,9 +311,36 @@ namespace CLICKO {
                         bool isMiddle = (flags & Win32.RI_MOUSE_MIDDLE_BUTTON_DOWN) != 0;
 
                         if (isLeft || isRight || isMiddle) {
-                            DeviceClassification dev = DeviceDetector.Classify(raw.header.hDevice);
+                            DeviceClassification dev;
+                            bool isAutoClicker = false;
 
-                            // Detect autoclicker / software-injected clicks (SendInput / mouse_event)
+                            if (raw.header.hDevice == IntPtr.Zero) {
+                                // Check if low-level hook flagged LLMHF_INJECTED (0x01) or LLMHF_LOWER_IL_INJECTED (0x02)
+                                bool hookInjected = (_lastHookFlags & Win32.LLMHF_INJECTED) != 0 ||
+                                                    (_lastHookFlags & Win32.LLMHF_LOWER_IL_INJECTED) != 0;
+                                bool recentHook = Math.Abs(Environment.TickCount - _lastHookTick) < 250;
+
+                                // Rate-limiting check for rapid synthetic bursts (< 30ms interval)
+                                int nowTick = Environment.TickCount;
+                                int interval = nowTick - _lastZeroClickTick;
+                                _lastZeroClickTick = nowTick;
+                                bool inhumanSpeed = (interval >= 0 && interval < 30);
+
+                                if ((hookInjected && recentHook) || inhumanSpeed) {
+                                    isAutoClicker = true;
+                                }
+
+                                if (isAutoClicker) {
+                                    dev = DeviceDetector.GetAutoClickerClassification();
+                                } else {
+                                    // Genuine human touch / tap on Precision Touchpad
+                                    dev = DeviceDetector.GetTouchpadClassification();
+                                }
+                            } else {
+                                dev = DeviceDetector.Classify(raw.header.hDevice);
+                            }
+
+                            // Filter out autoclicker / synthetic software injections
                             if (dev.Type == DeviceType.AutoClicker) {
                                 ClickButton btn = isLeft ? ClickButton.Left : (isRight ? ClickButton.Right : ClickButton.Middle);
                                 ClickStats.Instance.RecordAutoClick(btn);
@@ -297,6 +359,12 @@ namespace CLICKO {
         }
 
         public void Dispose() {
+            if (_mouseHookHandle != IntPtr.Zero) {
+                try {
+                    Win32.UnhookWindowsHookEx(_mouseHookHandle);
+                } catch { }
+                _mouseHookHandle = IntPtr.Zero;
+            }
             DestroyHandle();
         }
     }
